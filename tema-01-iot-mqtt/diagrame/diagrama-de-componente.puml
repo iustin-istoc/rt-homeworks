@@ -1,0 +1,75 @@
+@startuml diagrama-de-componente
+' Diagrama de componente – Tema 01 IoT/MQTT (istoc-iustin)
+skinparam componentStyle uml2
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam component {
+  BackgroundColor #DAE8FC
+  BorderColor #6C8EBF
+}
+skinparam interface {
+  BackgroundColor white
+  BorderColor black
+}
+left to right direction
+
+title Diagramă de componente – aplicația IoT (device → broker → serviciu → device)
+
+actor Operator
+
+component "device-simulator\n(1..n instanțe, ID diferit)" as DEV <<component>> {
+  component "PeriodicTelemetryTask\n(periodic, T = periodMs)" as P
+  component "SporadicAlarmTask\n(sporadic, interval minim 5 s)" as S
+  component "AperiodicCommandTask\n(aperiodic, FIFO)" as A
+  component "TemperatureSensor" as SENS
+  component "MqttConnection" as DMQ
+  queue "alarmEvents\n(BlockingQueue)" as QA
+  queue "commands\n(BlockingQueue)" as QC
+}
+
+component "Broker MQTT\ncontrol.aut.utcluj.ro:11188" as BRK <<component>>
+interface "IMqttPubSub\n(publish / subscribe,\ntopic ssatr/istoc-iustin/devices/+/…)" as IMQ
+
+component "business-service" as SRV <<component>> {
+  component "MqttConnection" as SMQ
+  component "MessageProcessor ×3\n(telemetry / alarm / status)" as MP
+  component "Dashboard" as DB
+  component "CsvStorage" as CSVS
+  component "CommandConsole" as CC
+  queue "inbox-uri\n(BlockingQueue ×3)" as QI
+}
+
+database "data/*.csv\n(telemetry, alarm, status)" as FILES
+interface "IStocare\n(append)" as ISTO
+interface "IConsola\n(show, <id> <COMANDA>)" as ICON
+
+' broker oferă interfața pub/sub, ambele aplicații o folosesc
+BRK -- IMQ
+DMQ --( IMQ
+SMQ --( IMQ
+
+' în device
+SENS <.. P : read()
+P ..> DMQ : publish telemetry
+P ..> QA : AlarmEvent
+QA ..> S : take()
+S ..> DMQ : publish alarm
+DMQ ..> QC : commands
+QC ..> A : take()
+A ..> P : setPeriodMs / setThreshold
+A ..> SENS : reset()
+A ..> DMQ : publish status
+
+' în serviciu
+SMQ ..> QI : telemetry / alarm / status
+QI ..> MP : take()
+MP ..> DB : onTelemetry / onAlarm / onStatus
+MP ..> CSVS : append
+CC ..> DB : print()
+CC ..> SMQ : publish commands
+
+CSVS --( ISTO
+FILES -- ISTO
+CC -- ICON
+Operator --( ICON
+@enduml

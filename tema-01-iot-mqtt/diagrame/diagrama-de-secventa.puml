@@ -1,0 +1,61 @@
+@startuml diagrama-de-secventa
+' Diagrama de secvență – Tema 01 IoT/MQTT (istoc-iustin)
+' Săgeată plină cu vârf deschis (->>) = mesaj asincron (publish MQTT / put în coadă)
+' Săgeată plină (->) = apel sincron; punctată (-->) = răspuns
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam sequenceMessageAlign center
+autonumber
+
+title Diagrame de secvență – alarmă la depășirea pragului și comanda SET_INTERVAL
+
+actor Operator
+participant "CommandConsole" as CC
+participant "MessageProcessor\n(alarm / status / telemetry)" as MP
+participant "Dashboard" as DB
+participant "CsvStorage" as CSV
+participant "Broker MQTT" as BRK
+participant "AperiodicCommandTask" as A
+participant "SporadicAlarmTask" as S
+participant "PeriodicTelemetryTask" as P
+participant "TemperatureSensor" as SENS
+
+== Scenariul 1: telemetrie care depășește pragul și produce o alarmă ==
+
+note over P : eliberare pe grilă r_k = r_(k-1) + T\n(așteptare absolută, System.nanoTime)
+P -> SENS : read()
+SENS --> P : t = 29.40
+P ->> BRK : publish …/device-1/telemetry\n"device-1;ts;29.40"
+P ->> S : alarmEvents.offer(AlarmEvent(29.40, prag 28.00, sosire))
+note right of P : jobul periodic se termină aici;\nnu așteaptă tratarea alarmei
+BRK ->> MP : telemetry (abonare …/+/telemetry)
+MP -> CSV : append("telemetry", mesaj)
+MP -> DB : onTelemetry("device-1", 29.40)
+
+S -> S : take(); sosire - ultima eliberare ≥ 5000 ms ?
+alt interval minim respectat
+  S ->> BRK : publish …/device-1/alarm\n"device-1;ts;29.40;28.00"
+  BRK ->> MP : alarm (abonare …/+/alarm)
+  MP -> CSV : append("alarm", mesaj)
+  MP -> DB : onAlarm("device-1", 29.40)
+  MP -> Operator : afișare imediată "!!! ALARMĂ device-1 …"
+else sosire prea devreme (< 5000 ms)
+  S -> S : eveniment RESPINS (nu se publică)
+end
+
+== Scenariul 2: operatorul trimite SET_INTERVAL, device-ul confirmă ==
+
+Operator -> CC : "device-1 SET_INTERVAL 1000"
+CC -> CC : separă deviceId / comandă
+CC ->> BRK : publish …/device-1/commands\n"SET_INTERVAL 1000"
+CC --> Operator : "Trimis către device-1"
+BRK ->> A : commands.put(…) (abonare …/device-1/commands)
+A -> A : take(); parsează, validează [100, 60000] ms
+A -> P : setPeriodMs(1000)
+note right of P : periodMs este volatile;\nnoua perioadă se aplică\nde la următoarea eliberare
+A ->> BRK : publish …/device-1/status\n"device-1;ts;OK SET_INTERVAL 1000"
+BRK ->> MP : status (abonare …/+/status)
+MP -> CSV : append("status", mesaj)
+MP -> DB : onStatus("device-1", "OK SET_INTERVAL 1000")
+MP -> Operator : afișare imediată ">>> device-1: OK SET_INTERVAL 1000"
+@enduml
